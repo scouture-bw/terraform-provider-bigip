@@ -56,6 +56,15 @@ resource "bigip_ltm_monitor" "test-postgresql-monitor" {
   password = "abcd1234"
 }
 
+resource "bigip_ltm_monitor" "test-radius-accounting-monitor" {
+  name     = "/Common/test-radius-accounting-monitor"
+  parent   = "/Common/radius_accounting"
+  interval = 5
+  timeout  = 16
+  username = "healthcheck"
+  secret   = "shared-secret"
+}
+
 # Step 1: Create custom parent monitor (inherits from built-in)
 resource "bigip_ltm_monitor" "parent-monitor" {
   name     = "/Common/parent"
@@ -80,7 +89,7 @@ resource "bigip_ltm_monitor" "child-monitor" {
 
 * `name` ((Required,type `string`) Specifies the Name of the LTM Monitor.Name of Monitor should be full path,full path is the combination of the `partition + monitor name`,For ex:`/Common/test-ltm-monitor`.
 
-* `parent` - (Required,type `string`)  Parent monitor for the system to use for setting initial values for the new monitor.
+* `parent` - (Required,type `string`)  Parent monitor for the system to use for setting initial values for the new monitor. Must be one of `/Common/http`, `/Common/https`, `/Common/icmp`, `/Common/gateway_icmp`, `/Common/tcp`, `/Common/tcp_half_open`, `/Common/ftp`, `/Common/ldap`, `/Common/smtp`, `/Common/dns`, `/Common/udp`, `/Common/postgresql`, `/Common/mysql`, `/Common/mssql`, `/Common/radius` or `/Common/radius_accounting`.
 
 * `custom_parent` - (Optional,type `string`)  Custom parent monitor for the system to use for setting initial values for the new monitor.
 
@@ -117,6 +126,8 @@ resource "bigip_ltm_monitor" "child-monitor" {
 * `username` - (Optional,type `string`) Specifies the user name if the monitored target requires authentication
 
 * `password` - (Optional,type `string`) Specifies the password if the monitored target requires authentication 
+
+* `secret` - (Optional,type `string`, sensitive) Specifies the shared secret of the RADIUS server. Only applicable when the parent monitor is `/Common/radius` or `/Common/radius_accounting`. The BIG-IP returns the secret encrypted, so the value in the configuration is kept in the state and changes made outside of Terraform are not detected.
 
 * `compatibility` -  (Optional,type `string`) Specifies, when enabled, that the SSL options setting (in OpenSSL) is set to ALL. Accepts 'enabled' or 'disabled' values, the default value is 'enabled'.
 

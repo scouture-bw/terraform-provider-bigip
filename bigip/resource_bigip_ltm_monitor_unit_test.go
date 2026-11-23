@@ -7,6 +7,7 @@ package bigip
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +22,7 @@ import (
 // monitorTypeURIs mirrors the list of monitor type URIs go-bigip's
 // Monitors() iterates over, so tests can register empty-list handlers for
 // every type and override just the one under test.
-var monitorTypeURIs = []string{"http", "https", "icmp", "gateway-icmp", "tcp", "tcp-half-open", "ftp", "udp", "postgresql", "mysql", "mssql", "ldap", "smtp"}
+var monitorTypeURIs = []string{"http", "https", "icmp", "gateway-icmp", "tcp", "tcp-half-open", "ftp", "udp", "postgresql", "mysql", "mssql", "ldap", "smtp", "radius", "radius-accounting"}
 
 // newMonitorTestMux registers empty {"items":[]} handlers for every monitor
 // type endpoint under /mgmt/tm/ltm/monitor/<type>, except those present in
@@ -60,7 +61,7 @@ func TestResourceBigipLtmMonitorValidateParent(t *testing.T) {
 		"/Common/udp", "/Common/postgresql", "/Common/mysql", "/Common/mssql",
 		"/Common/http", "/Common/https", "/Common/icmp", "/Common/gateway_icmp",
 		"/Common/tcp", "/Common/tcp_half_open", "/Common/ftp", "/Common/ldap",
-		"/Common/smtp", "/Common/dns",
+		"/Common/smtp", "/Common/dns", "/Common/radius", "/Common/radius_accounting",
 	}
 	for _, p := range validParents {
 		warnings, errs := validateParent(p, "parent")
@@ -78,7 +79,29 @@ func TestResourceBigipLtmMonitorMonitorParent(t *testing.T) {
 	assert.Equal(t, "http", monitorParent("/Common/http"))
 	assert.Equal(t, "gateway_icmp", monitorParent("/Common/gateway_icmp"))
 	assert.Equal(t, "tcp_half_open", monitorParent("/Common/tcp_half_open"))
+	assert.Equal(t, "radius_accounting", monitorParent("/Common/radius_accounting"))
 	assert.Equal(t, "custom", monitorParent("custom"))
+}
+
+func TestResourceBigipLtmMonitorMonitorTypeURI(t *testing.T) {
+	assert.Equal(t, "http", monitorTypeURI("http"))
+	assert.Equal(t, "gateway-icmp", monitorTypeURI("gateway_icmp"))
+	assert.Equal(t, "tcp-half-open", monitorTypeURI("tcp_half_open"))
+	assert.Equal(t, "radius", monitorTypeURI("radius"))
+	assert.Equal(t, "radius-accounting", monitorTypeURI("radius_accounting"))
+}
+
+func TestResourceBigipLtmMonitorGetLtmMonitorConfigRadiusSecret(t *testing.T) {
+	d := ltmMonitorResourceData(t, map[string]interface{}{
+		"name":     "/Common/test-radius-monitor",
+		"parent":   "/Common/radius_accounting",
+		"username": "healthcheck",
+		"secret":   "shared-secret",
+	})
+	config := getLtmMonitorConfig(d, &bigip.Monitor{})
+	assert.Equal(t, "/Common/radius_accounting", config.ParentMonitor)
+	assert.Equal(t, "healthcheck", config.Username)
+	assert.Equal(t, "shared-secret", config.Secret)
 }
 
 func TestResourceBigipLtmMonitorGetLtmMonitorConfig(t *testing.T) {
@@ -461,6 +484,86 @@ func TestResourceBigipLtmMonitorDeleteTCPHalfOpen(t *testing.T) {
 		"parent": "/Common/tcp_half_open",
 	})
 	d.SetId("/Common/test-tcpho-monitor")
+
+	diags := resourceBigipLtmMonitorDelete(context.Background(), d, client)
+	require.False(t, diags.HasError(), "unexpected error: %v", diags)
+}
+
+func TestResourceBigipLtmMonitorCreateRadiusAccounting(t *testing.T) {
+	var body map[string]interface{}
+	mux := newMonitorTestMux(map[string]http.HandlerFunc{
+		"radius-accounting": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.Method {
+			case "POST":
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				_, _ = fmt.Fprint(w, `{"name":"test-radius-monitor","fullPath":"/Common/test-radius-monitor"}`)
+			default:
+				_, _ = fmt.Fprint(w, `{"items":[{"name":"test-radius-monitor","fullPath":"/Common/test-radius-monitor","defaultsFrom":"/Common/radius_accounting","username":"healthcheck","secret":"$M$encrypted"}]}`)
+			}
+		},
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	client := newMonitorTestClient(server.URL)
+
+	d := ltmMonitorResourceData(t, map[string]interface{}{
+		"name":     "/Common/test-radius-monitor",
+		"parent":   "/Common/radius_accounting",
+		"username": "healthcheck",
+		"secret":   "shared-secret",
+	})
+
+	diags := resourceBigipLtmMonitorCreate(context.Background(), d, client)
+	require.False(t, diags.HasError(), "unexpected error: %v", diags)
+	assert.Equal(t, "shared-secret", body["secret"])
+	assert.Equal(t, "healthcheck", body["username"])
+	// the encrypted value returned by the BIG-IP must not replace the configured secret
+	assert.Equal(t, "shared-secret", d.Get("secret"))
+}
+
+func TestResourceBigipLtmMonitorUpdateRadiusAccounting(t *testing.T) {
+	mux := newMonitorTestMux(map[string]http.HandlerFunc{
+		"radius-accounting": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"items":[{"name":"test-radius-monitor","fullPath":"/Common/test-radius-monitor","defaultsFrom":"/Common/radius_accounting"}]}`)
+		},
+	})
+	mux.HandleFunc("/mgmt/tm/ltm/monitor/radius-accounting/~Common~test-radius-monitor", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "PUT", r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"name":"test-radius-monitor","fullPath":"/Common/test-radius-monitor"}`)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	client := newMonitorTestClient(server.URL)
+
+	d := ltmMonitorResourceData(t, map[string]interface{}{
+		"name":   "/Common/test-radius-monitor",
+		"parent": "/Common/radius_accounting",
+		"secret": "shared-secret",
+	})
+	d.SetId("/Common/test-radius-monitor")
+
+	diags := resourceBigipLtmMonitorUpdate(context.Background(), d, client)
+	require.False(t, diags.HasError(), "unexpected error: %v", diags)
+}
+
+func TestResourceBigipLtmMonitorDeleteRadiusAccounting(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/mgmt/tm/ltm/monitor/radius-accounting/~Common~test-radius-monitor", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "DELETE", r.Method)
+		w.WriteHeader(http.StatusOK)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	client := newMonitorTestClient(server.URL)
+
+	d := ltmMonitorResourceData(t, map[string]interface{}{
+		"name":   "/Common/test-radius-monitor",
+		"parent": "/Common/radius_accounting",
+	})
+	d.SetId("/Common/test-radius-monitor")
 
 	diags := resourceBigipLtmMonitorDelete(context.Background(), d, client)
 	require.False(t, diags.HasError(), "unexpected error: %v", diags)

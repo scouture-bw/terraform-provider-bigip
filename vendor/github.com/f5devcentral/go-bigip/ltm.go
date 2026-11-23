@@ -1075,6 +1075,8 @@ type Monitor struct {
 	MandatoryAttributes string `json:"mandatoryAttributes,omitempty"`
 	ChaseReferrals      string `json:"chaseReferrals,omitempty"`
 	Security            string `json:"security,omitempty"`
+	// radius and radius-accounting specifics
+	Secret string `json:"secret,omitempty"`
 }
 
 type monitorDTO struct {
@@ -1115,6 +1117,8 @@ type monitorDTO struct {
 	MandatoryAttributes string `json:"mandatoryAttributes,omitempty"`
 	ChaseReferrals      string `json:"chaseReferrals,omitempty"`
 	Security            string `json:"security,omitempty"`
+	// radius and radius-accounting specifics
+	Secret string `json:"secret,omitempty"`
 }
 
 type Profiles struct {
@@ -3020,7 +3024,7 @@ func (b *BigIP) DeleteVirtualAddress(vaddr string) error {
 // Monitors returns a list of all HTTP, HTTPS, Gateway ICMP, ICMP, and TCP monitors.
 func (b *BigIP) Monitors() ([]Monitor, error) {
 	var monitors []Monitor
-	monitorUris := []string{"http", "https", "icmp", "gateway-icmp", "tcp", "tcp-half-open", "ftp", "udp", "postgresql", "mysql", "mssql", "ldap", "smtp"}
+	monitorUris := []string{"http", "https", "icmp", "gateway-icmp", "tcp", "tcp-half-open", "ftp", "udp", "postgresql", "mysql", "mssql", "ldap", "smtp", "radius", "radius-accounting"}
 
 	for _, name := range monitorUris {
 		var m Monitors

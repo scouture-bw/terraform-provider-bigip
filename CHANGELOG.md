@@ -1,5 +1,9 @@
 ## Unreleased
 
+# Features additions:
+
+- Added support for the `/Common/radius` and `/Common/radius_accounting` parent monitors, and a sensitive `secret` argument for the RADIUS shared secret, to `bigip_ltm_monitor`
+
 ## 1.29.0 (October 6, 2026)
 
 # Features additions:

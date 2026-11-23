@@ -19,20 +19,22 @@ import (
 )
 
 var parentMonitors = map[string]bool{
-	"/Common/udp":           true,
-	"/Common/postgresql":    true,
-	"/Common/mysql":         true,
-	"/Common/mssql":         true,
-	"/Common/http":          true,
-	"/Common/https":         true,
-	"/Common/icmp":          true,
-	"/Common/gateway_icmp":  true,
-	"/Common/tcp":           true,
-	"/Common/tcp_half_open": true,
-	"/Common/ftp":           true,
-	"/Common/ldap":          true,
-	"/Common/smtp":          true,
-	"/Common/dns":           true,
+	"/Common/udp":               true,
+	"/Common/postgresql":        true,
+	"/Common/mysql":             true,
+	"/Common/mssql":             true,
+	"/Common/http":              true,
+	"/Common/https":             true,
+	"/Common/icmp":              true,
+	"/Common/gateway_icmp":      true,
+	"/Common/tcp":               true,
+	"/Common/tcp_half_open":     true,
+	"/Common/ftp":               true,
+	"/Common/ldap":              true,
+	"/Common/smtp":              true,
+	"/Common/dns":               true,
+	"/Common/radius":            true,
+	"/Common/radius_accounting": true,
 }
 
 func resourceBigipLtmMonitor() *schema.Resource {
@@ -58,7 +60,7 @@ func resourceBigipLtmMonitor() *schema.Resource {
 				Required:     true,
 				ValidateFunc: validateParent,
 				ForceNew:     true,
-				Description:  "Existing monitor to inherit from. Must be one of /Common/http, /Common/https, /Common/icmp, /Common/gateway_icmp or /Common/tcp_half_open or /Common/smtp or /Common/dns",
+				Description:  "Existing monitor to inherit from. Must be one of /Common/http, /Common/https, /Common/icmp, /Common/gateway_icmp or /Common/tcp_half_open or /Common/smtp or /Common/dns or /Common/radius or /Common/radius_accounting",
 			},
 			"custom_parent": {
 				Type:        schema.TypeString,
@@ -186,6 +188,12 @@ func resourceBigipLtmMonitor() *schema.Resource {
 				Optional:    true,
 				Description: "Specifies the user name if the monitored target requires authentication",
 			},
+			"secret": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Sensitive:   true,
+				Description: "Specifies the shared secret of the RADIUS server, only applicable when the parent monitor is /Common/radius or /Common/radius_accounting",
+			},
 			"database": {
 				Type:        schema.TypeString,
 				Optional:    true,
@@ -244,12 +252,7 @@ func resourceBigipLtmMonitorCreate(ctx context.Context, d *schema.ResourceData, 
 	}
 	config := getLtmMonitorConfig(d, pss)
 
-	if strings.Contains(parent, "gateway") {
-		parent = "gateway-icmp"
-	}
-	if strings.Contains(parent, "tcp_half_open") {
-		parent = "tcp-half-open"
-	}
+	parent = monitorTypeURI(parent)
 
 	err := client.CreateMonitor(config, parent)
 
@@ -318,6 +321,7 @@ func resourceBigipLtmMonitorRead(ctx context.Context, d *schema.ResourceData, me
 			_ = d.Set("adaptive_limit", m.AdaptiveLimit)
 			_ = d.Set("username", m.Username)
 			_ = d.Set("password", m.Password)
+			// secret is not read back: the BIG-IP returns it encrypted, so the configured value is kept in state
 			_ = d.Set("name", name)
 			_ = d.Set("database", m.Database)
 
@@ -344,12 +348,7 @@ func resourceBigipLtmMonitorUpdate(ctx context.Context, d *schema.ResourceData, 
 
 	parent := monitorParent(d.Get("parent").(string))
 
-	if strings.Contains(parent, "gateway") {
-		parent = "gateway-icmp"
-	}
-	if strings.Contains(parent, "tcp_half_open") {
-		parent = "tcp-half-open"
-	}
+	parent = monitorTypeURI(parent)
 
 	err := client.ModifyMonitor(name, parent, config)
 	if err != nil {
@@ -366,12 +365,7 @@ func resourceBigipLtmMonitorDelete(ctx context.Context, d *schema.ResourceData, 
 	parent := monitorParent(d.Get("parent").(string))
 	log.Println("[INFO] Deleting monitor " + name + "::" + parent)
 
-	if strings.Contains(parent, "gateway") {
-		parent = "gateway-icmp"
-	}
-	if strings.Contains(parent, "tcp_half_open") {
-		parent = "tcp-half-open"
-	}
+	parent = monitorTypeURI(parent)
 
 	err := client.DeleteMonitor(name, parent)
 	if err != nil {
@@ -388,11 +382,26 @@ func validateParent(v interface{}, k string) ([]string, []error) {
 		return nil, nil
 	}
 
-	return nil, []error{fmt.Errorf("parent must be one of /Common/udp, /Common/postgresql, /Common/mysql,/Common/mssql, /Common/http, /Common/https, /Common/icmp, /Common/gateway_icmp, /Common/tcp_half_open, /Common/tcp, /Common/ftp, /Common/smtp and /Common/dns")}
+	return nil, []error{fmt.Errorf("parent must be one of /Common/udp, /Common/postgresql, /Common/mysql,/Common/mssql, /Common/http, /Common/https, /Common/icmp, /Common/gateway_icmp, /Common/tcp_half_open, /Common/tcp, /Common/ftp, /Common/ldap, /Common/smtp, /Common/dns, /Common/radius and /Common/radius_accounting")}
 }
 
 func monitorParent(s string) string {
 	return strings.TrimPrefix(s, "/Common/")
+}
+
+// monitorTypeURI converts a parent monitor name, as returned by monitorParent, into
+// the monitor type used in the iControl REST path, which spells multi word types with hyphens.
+func monitorTypeURI(parent string) string {
+	if strings.Contains(parent, "gateway") {
+		return "gateway-icmp"
+	}
+	if strings.Contains(parent, "tcp_half_open") {
+		return "tcp-half-open"
+	}
+	if strings.Contains(parent, "radius_accounting") {
+		return "radius-accounting"
+	}
+	return parent
 }
 
 func getLtmMonitorConfig(d *schema.ResourceData, config *bigip.Monitor) *bigip.Monitor {
@@ -424,6 +433,7 @@ func getLtmMonitorConfig(d *schema.ResourceData, config *bigip.Monitor) *bigip.M
 	config.Transparent = d.Get("transparent").(string)
 	config.Username = d.Get("username").(string)
 	config.Password = d.Get("password").(string)
+	config.Secret = d.Get("secret").(string)
 	config.UpInterval = d.Get("up_interval").(int)
 	config.SSLProfile = d.Get("ssl_profile").(string)
 	config.Base = d.Get("base").(string)
